@@ -1,5 +1,4 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { tokenStorage } from "@/lib/token-storage"
 
 // Zoho OAuth configuration
 const ZOHO_CLIENT_ID = process.env.ZOHO_CLIENT_ID || "your_zoho_client_id"
@@ -8,21 +7,14 @@ const ZOHO_REDIRECT_URI =
   process.env.ZOHO_REDIRECT_URI ||
   `${process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"}/api/zoho/auth/callback`
 
-// In-memory token storage (in production, use database or secure session storage)
-// let authTokens = {
-//   access_token: "",
-//   refresh_token: "",
-//   expires_at: "",
-//   organization_id: "",
-//   user_email: "",
-// }
-
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const code = searchParams.get("code")
     const state = searchParams.get("state")
     const error = searchParams.get("error")
+
+    console.log("OAuth callback received:", { code: !!code, error, state })
 
     // Handle OAuth errors
     if (error) {
@@ -64,6 +56,8 @@ export async function GET(request: NextRequest) {
       throw new Error("Authorization code not received")
     }
 
+    console.log("Exchanging authorization code for tokens...")
+
     // Exchange authorization code for access token
     const tokenResponse = await fetch("https://accounts.zoho.com/oauth/v2/token", {
       method: "POST",
@@ -86,38 +80,42 @@ export async function GET(request: NextRequest) {
     }
 
     const tokenData = await tokenResponse.json()
+    console.log("Token exchange successful:", {
+      hasAccessToken: !!tokenData.access_token,
+      hasRefreshToken: !!tokenData.refresh_token,
+      expiresIn: tokenData.expires_in,
+    })
 
     // Get user information
+    console.log("Fetching user information...")
     const userResponse = await fetch("https://accounts.zoho.com/oauth/user/info", {
       headers: {
         Authorization: `Zoho-oauthtoken ${tokenData.access_token}`,
       },
     })
 
-    let userInfo = { Email: "unknown@domain.com", Display_Name: "Unknown User" }
+    let userInfo = { Email: "unknown@domain.com", Display_Name: "Unknown User", ZUID: "unknown" }
     if (userResponse.ok) {
       userInfo = await userResponse.json()
+      console.log("User info retrieved:", {
+        email: userInfo.Email,
+        name: userInfo.Display_Name,
+        zuid: userInfo.ZUID,
+      })
+    } else {
+      console.warn("Failed to fetch user info, using defaults")
     }
 
-    // Store tokens (in production, use secure storage)
-    // authTokens = {
-    //   access_token: tokenData.access_token,
-    //   refresh_token: tokenData.refresh_token,
-    //   expires_at: new Date(Date.now() + tokenData.expires_in * 1000).toISOString(),
-    //   organization_id: userInfo.ZUID || "unknown",
-    //   user_email: userInfo.Email,
-    // }
-
-    // Store tokens using shared storage
-    tokenStorage.set({
+    // Prepare tokens for storage
+    const tokens = {
       access_token: tokenData.access_token,
       refresh_token: tokenData.refresh_token,
       expires_at: new Date(Date.now() + tokenData.expires_in * 1000).toISOString(),
       organization_id: userInfo.ZUID || "unknown",
       user_email: userInfo.Email,
-    })
+    }
 
-    console.log("Tokens stored successfully")
+    console.log("Storing tokens in cookies...")
 
     // Success page
     const successHtml = `
@@ -166,6 +164,7 @@ export async function GET(request: NextRequest) {
           </div>
         </div>
         <script>
+          console.log('Sending success message to parent window...');
           // Parent window'a başarılı authentication mesajı gönder
           if (window.opener) {
             window.opener.postMessage({ 
@@ -173,16 +172,68 @@ export async function GET(request: NextRequest) {
               user: '${userInfo.Email}',
               organization: '${userInfo.Display_Name}'
             }, '*');
-            setTimeout(() => window.close(), 3000);
+            console.log('Success message sent');
+            setTimeout(() => {
+              console.log('Closing popup window');
+              window.close();
+            }, 3000);
+          } else {
+            console.warn('No opener window found');
           }
         </script>
       </body>
       </html>
     `
 
-    return new NextResponse(successHtml, {
+    // Create response with cookies
+    const response = new NextResponse(successHtml, {
       headers: { "Content-Type": "text/html" },
     })
+
+    // Set cookies manually
+    response.cookies.set("zoho_access_token", tokens.access_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 60 * 60 * 24 * 7, // 7 days
+      path: "/",
+    })
+
+    response.cookies.set("zoho_refresh_token", tokens.refresh_token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 60 * 60 * 24 * 30, // 30 days
+      path: "/",
+    })
+
+    response.cookies.set("zoho_expires_at", tokens.expires_at, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 60 * 60 * 24 * 7, // 7 days
+      path: "/",
+    })
+
+    response.cookies.set("zoho_org_id", tokens.organization_id, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 60 * 60 * 24 * 30, // 30 days
+      path: "/",
+    })
+
+    response.cookies.set("zoho_user_email", tokens.user_email, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 60 * 60 * 24 * 30, // 30 days
+      path: "/",
+    })
+
+    console.log("Tokens stored in cookies successfully")
+
+    return response
   } catch (error) {
     console.error("OAuth callback error:", error)
 

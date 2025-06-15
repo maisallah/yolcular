@@ -6,7 +6,7 @@ export async function GET() {
     console.log("Auth check requested")
 
     const tokens = tokenStorage.get()
-    console.log("Current tokens:", {
+    console.log("Current tokens from cookies:", {
       hasAccessToken: !!tokens.access_token,
       hasRefreshToken: !!tokens.refresh_token,
       expiresAt: tokens.expires_at,
@@ -15,7 +15,7 @@ export async function GET() {
 
     // Check if we have valid tokens
     if (!tokens.access_token || !tokens.expires_at) {
-      console.log("No tokens found")
+      console.log("No tokens found in cookies")
       return NextResponse.json({ authenticated: false }, { status: 401 })
     }
 
@@ -76,19 +76,20 @@ export async function GET() {
 
 export async function POST() {
   try {
-    // Manual token refresh
+    console.log("Manual token refresh requested")
     const tokens = tokenStorage.get()
+
+    // Manual token refresh
     if (!tokens.refresh_token) {
       return NextResponse.json({ error: "No refresh token available" }, { status: 401 })
     }
 
     await refreshAccessToken()
-
-    const updatedTokens = tokenStorage.get()
+    const refreshedTokens = tokenStorage.get()
 
     return NextResponse.json({
-      access_token: updatedTokens.access_token,
-      expires_in: Math.floor((new Date(updatedTokens.expires_at).getTime() - Date.now()) / 1000),
+      access_token: refreshedTokens.access_token,
+      expires_in: Math.floor((new Date(refreshedTokens.expires_at).getTime() - Date.now()) / 1000),
       token_type: "Bearer",
     })
   } catch (error) {
@@ -125,7 +126,7 @@ async function refreshAccessToken() {
   const tokenData = await refreshResponse.json()
 
   // Update stored tokens
-  tokenStorage.set({
+  tokenStorage.setServerSide({
     access_token: tokenData.access_token,
     expires_at: new Date(Date.now() + tokenData.expires_in * 1000).toISOString(),
     // Refresh token might be updated

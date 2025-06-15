@@ -32,19 +32,37 @@ export async function POST() {
     // Clear stored tokens
     tokenStorage.clear()
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       message: "Logout successful - Zoho CRM bağlantısı kesildi",
     })
+
+    // Clear cookies
+    response.cookies.delete("zoho_access_token")
+    response.cookies.delete("zoho_refresh_token")
+    response.cookies.delete("zoho_expires_at")
+    response.cookies.delete("zoho_org_id")
+    response.cookies.delete("zoho_user_email")
+
+    return response
   } catch (error) {
     console.error("Logout error:", error)
 
     // Clear tokens even if there's an error
     tokenStorage.clear()
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       message: "Logout completed with errors",
     })
+
+    // Clear cookies
+    response.cookies.delete("zoho_access_token")
+    response.cookies.delete("zoho_refresh_token")
+    response.cookies.delete("zoho_expires_at")
+    response.cookies.delete("zoho_org_id")
+    response.cookies.delete("zoho_user_email")
+
+    return response
   }
 }
