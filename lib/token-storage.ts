@@ -1,4 +1,5 @@
-import { cookies } from "next/headers"
+// Simple token storage using environment variables and memory
+// In production, this should be replaced with database storage
 
 interface AuthTokens {
   access_token: string
@@ -8,32 +9,36 @@ interface AuthTokens {
   user_email: string
 }
 
-// Cookie-based token storage for serverless compatibility
+// Global token storage (in-memory for now)
+let globalTokens: AuthTokens | null = null
+
 export const tokenStorage = {
-  // Get tokens from cookies
+  // Get current tokens
   get(): AuthTokens {
-    try {
-      const cookieStore = cookies()
-
-      const tokens = {
-        access_token: cookieStore.get("zoho_access_token")?.value || "",
-        refresh_token: cookieStore.get("zoho_refresh_token")?.value || "",
-        expires_at: cookieStore.get("zoho_expires_at")?.value || "",
-        organization_id: cookieStore.get("zoho_org_id")?.value || "",
-        user_email: cookieStore.get("zoho_user_email")?.value || "",
-      }
-
-      console.log("Retrieved tokens from cookies:", {
-        hasAccessToken: !!tokens.access_token,
-        hasRefreshToken: !!tokens.refresh_token,
-        expiresAt: tokens.expires_at,
-        userEmail: tokens.user_email,
+    if (globalTokens) {
+      console.log("Retrieved tokens from memory:", {
+        hasAccessToken: !!globalTokens.access_token,
+        hasRefreshToken: !!globalTokens.refresh_token,
+        expiresAt: globalTokens.expires_at,
+        userEmail: globalTokens.user_email,
       })
+      return { ...globalTokens }
+    }
 
-      return tokens
-    } catch (error) {
-      console.error("Error reading tokens from cookies:", error)
-      return {
+    // Return empty tokens if none exist
+    return {
+      access_token: "",
+      refresh_token: "",
+      expires_at: "",
+      organization_id: "",
+      user_email: "",
+    }
+  },
+
+  // Set tokens (partial update supported)
+  set(tokens: Partial<AuthTokens>): void {
+    if (!globalTokens) {
+      globalTokens = {
         access_token: "",
         refresh_token: "",
         expires_at: "",
@@ -41,52 +46,52 @@ export const tokenStorage = {
         user_email: "",
       }
     }
+
+    globalTokens = { ...globalTokens, ...tokens }
+    console.log("Tokens updated in memory:", {
+      hasAccessToken: !!globalTokens.access_token,
+      hasRefreshToken: !!globalTokens.refresh_token,
+      expiresAt: globalTokens.expires_at,
+      userEmail: globalTokens.user_email,
+    })
+  },
+
+  // Clear all tokens
+  clear(): void {
+    globalTokens = null
+    console.log("Tokens cleared from memory")
   },
 
   // Check if tokens are valid (not expired)
   isValid(): boolean {
-    try {
-      const tokens = this.get()
-
-      if (!tokens.access_token || !tokens.expires_at) {
-        console.log("Token validation failed: missing access_token or expires_at")
-        return false
-      }
-
-      const expiresAt = new Date(tokens.expires_at)
-      const now = new Date()
-      const isValid = expiresAt > now
-
-      console.log("Token validation:", {
-        expiresAt: expiresAt.toISOString(),
-        now: now.toISOString(),
-        isValid,
-        timeUntilExpiry: Math.floor((expiresAt.getTime() - now.getTime()) / 1000),
-      })
-
-      return isValid
-    } catch (error) {
-      console.error("Error checking token validity:", error)
+    if (!globalTokens || !globalTokens.access_token || !globalTokens.expires_at) {
+      console.log("Token validation failed: no tokens or missing data")
       return false
     }
+
+    const expiresAt = new Date(globalTokens.expires_at)
+    const now = new Date()
+    const isValid = expiresAt > now
+
+    console.log("Token validation:", {
+      expiresAt: expiresAt.toISOString(),
+      now: now.toISOString(),
+      isValid,
+      timeUntilExpiry: Math.floor((expiresAt.getTime() - now.getTime()) / 1000),
+    })
+
+    return isValid
   },
 
   // Get time until expiry in seconds
   getTimeUntilExpiry(): number {
-    try {
-      const tokens = this.get()
-
-      if (!tokens.expires_at) {
-        return 0
-      }
-
-      const expiresAt = new Date(tokens.expires_at)
-      const now = new Date()
-
-      return Math.max(0, Math.floor((expiresAt.getTime() - now.getTime()) / 1000))
-    } catch (error) {
-      console.error("Error calculating time until expiry:", error)
+    if (!globalTokens || !globalTokens.expires_at) {
       return 0
     }
+
+    const expiresAt = new Date(globalTokens.expires_at)
+    const now = new Date()
+
+    return Math.max(0, Math.floor((expiresAt.getTime() - now.getTime()) / 1000))
   },
 }

@@ -1,89 +1,67 @@
 import { NextResponse } from "next/server"
 import { tokenStorage } from "@/lib/token-storage"
-import { cookies } from "next/headers"
 
 export async function GET() {
   try {
     console.log("=== AUTH CHECK START ===")
 
-    // Debug: Check all cookies first
-    const cookieStore = cookies()
-    const allCookies = cookieStore.getAll()
-    console.log(
-      "All available cookies:",
-      allCookies.map((c) => ({ name: c.name, hasValue: !!c.value })),
-    )
+    // Get tokens from our token storage API
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"
 
-    const tokens = tokenStorage.get()
-    console.log("Tokens retrieved:", {
-      hasAccessToken: !!tokens.access_token,
-      accessTokenLength: tokens.access_token.length,
-      hasRefreshToken: !!tokens.refresh_token,
-      refreshTokenLength: tokens.refresh_token.length,
-      expiresAt: tokens.expires_at,
-      userEmail: tokens.user_email,
+    let tokensResponse
+    try {
+      tokensResponse = await fetch(`${baseUrl}/api/zoho/tokens`, {
+        method: "GET",
+      })
+    } catch (error) {
+      console.error("Failed to fetch tokens from storage:", error)
+      return NextResponse.json({ authenticated: false, reason: "Token storage unavailable" }, { status: 401 })
+    }
+
+    if (!tokensResponse.ok) {
+      console.log("❌ No tokens found in storage")
+      return NextResponse.json({ authenticated: false, reason: "No tokens found" }, { status: 401 })
+    }
+
+    const tokenData = await tokensResponse.json()
+    const tokens = tokenData.tokens
+
+    console.log("Tokens retrieved from storage:", {
+      hasAccessToken: !!tokens?.access_token,
+      hasRefreshToken: !!tokens?.refresh_token,
+      expiresAt: tokens?.expires_at,
+      userEmail: tokens?.user_email,
     })
 
-    // Check if we have valid tokens
-    if (!tokens.access_token || !tokens.expires_at) {
-      console.log("❌ No tokens found - returning 401")
-      return NextResponse.json(
-        {
-          authenticated: false,
-          reason: "No tokens found",
-          debug: {
-            hasAccessToken: !!tokens.access_token,
-            hasExpiresAt: !!tokens.expires_at,
-          },
-        },
-        { status: 401 },
-      )
+    if (!tokens?.access_token || !tokens?.expires_at) {
+      console.log("❌ Invalid tokens in storage")
+      return NextResponse.json({ authenticated: false, reason: "Invalid tokens" }, { status: 401 })
     }
 
     // Check if token is expired
-    if (!tokenStorage.isValid()) {
-      console.log("⏰ Token expired, attempting refresh...")
+    const expiresAt = new Date(tokens.expires_at)
+    const now = new Date()
+    const isExpired = expiresAt <= now
 
-      if (tokens.refresh_token) {
-        try {
-          await refreshAccessToken()
-          console.log("✅ Token refresh successful")
-        } catch (error) {
-          console.error("❌ Token refresh failed:", error)
-          return NextResponse.json(
-            {
-              authenticated: false,
-              reason: "Token refresh failed",
-              error: error instanceof Error ? error.message : "Unknown error",
-            },
-            { status: 401 },
-          )
-        }
-      } else {
-        console.log("❌ No refresh token available")
-        return NextResponse.json(
-          {
-            authenticated: false,
-            reason: "No refresh token available",
-          },
-          { status: 401 },
-        )
-      }
-    }
-
-    // Get updated tokens after potential refresh
-    const currentTokens = tokenStorage.get()
-    console.log("Using tokens for validation:", {
-      hasAccessToken: !!currentTokens.access_token,
-      accessTokenPreview: currentTokens.access_token.substring(0, 10) + "...",
+    console.log("Token expiry check:", {
+      expiresAt: expiresAt.toISOString(),
+      now: now.toISOString(),
+      isExpired,
+      timeUntilExpiry: Math.floor((expiresAt.getTime() - now.getTime()) / 1000),
     })
+
+    if (isExpired) {
+      console.log("⏰ Token expired")
+      // TODO: Implement token refresh
+      return NextResponse.json({ authenticated: false, reason: "Token expired" }, { status: 401 })
+    }
 
     // Validate token with Zoho
     try {
       console.log("🔍 Validating token with Zoho...")
       const userResponse = await fetch("https://accounts.zoho.com/oauth/user/info", {
         headers: {
-          Authorization: `Zoho-oauthtoken ${currentTokens.access_token}`,
+          Authorization: `Zoho-oauthtoken ${tokens.access_token}`,
         },
       })
 
@@ -96,7 +74,7 @@ export async function GET() {
           statusText: userResponse.statusText,
           body: errorText,
         })
-        throw new Error(`Token validation failed: ${userResponse.status}`)
+        return NextResponse.json({ authenticated: false, reason: "Token validation failed" }, { status: 401 })
       }
 
       const userInfo = await userResponse.json()
@@ -108,30 +86,17 @@ export async function GET() {
       return NextResponse.json({
         authenticated: true,
         organization: userInfo.Display_Name || "Zoho Organization",
-        user: userInfo.Email || currentTokens.user_email,
-        expiresAt: currentTokens.expires_at,
+        user: userInfo.Email || tokens.user_email,
+        expiresAt: tokens.expires_at,
         scopes: ["ZohoCRM.modules.deals.READ", "ZohoCRM.modules.contacts.READ"],
       })
     } catch (error) {
       console.error("❌ Token validation error:", error)
-      return NextResponse.json(
-        {
-          authenticated: false,
-          reason: "Token validation failed",
-          error: error instanceof Error ? error.message : "Unknown error",
-        },
-        { status: 401 },
-      )
+      return NextResponse.json({ authenticated: false, reason: "Token validation failed" }, { status: 401 })
     }
   } catch (error) {
     console.error("❌ Authentication check failed:", error)
-    return NextResponse.json(
-      {
-        error: "Authentication check failed",
-        details: error instanceof Error ? error.message : "Unknown error",
-      },
-      { status: 500 },
-    )
+    return NextResponse.json({ error: "Authentication check failed" }, { status: 500 })
   }
 }
 
