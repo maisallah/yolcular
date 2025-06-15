@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -26,6 +26,7 @@ import {
   AlertCircle,
   LogIn,
   LogOut,
+  RefreshCw,
 } from "lucide-react"
 
 interface TransferData {
@@ -107,6 +108,7 @@ export default function AdminPage() {
   // Zoho authentication states
   const [zohoAuth, setZohoAuth] = useState<ZohoAuthStatus>({ authenticated: false })
   const [checkingAuth, setCheckingAuth] = useState(false)
+  const [authInProgress, setAuthInProgress] = useState(false)
 
   // Zoho integration states
   const [zohoDeals, setZohoDeals] = useState<ZohoDeal[]>([])
@@ -137,10 +139,57 @@ export default function AdminPage() {
     leadId: "",
   })
 
+  // Message handler for popup communication
+  const handlePopupMessage = useCallback((event: MessageEvent) => {
+    // Security check - ensure message is from our domain
+    if (event.origin !== window.location.origin) {
+      console.log("Message from different origin ignored:", event.origin)
+      return
+    }
+
+    console.log("Received popup message:", event.data)
+
+    if (event.data.type === "ZOHO_AUTH_SUCCESS") {
+      console.log("Authentication successful, updating state...")
+
+      // Update auth state immediately
+      setZohoAuth({
+        authenticated: true,
+        organization: event.data.organization || "Zoho Organization",
+        user: event.data.user || "Zoho User",
+        expiresAt: new Date(Date.now() + 3600000).toISOString(), // 1 hour from now
+      })
+
+      setAuthInProgress(false)
+      setError("✅ Zoho CRM bağlantısı başarıyla kuruldu!")
+
+      // Clear error after 5 seconds
+      setTimeout(() => setError(null), 5000)
+
+      // Re-check auth status to confirm
+      setTimeout(() => {
+        checkZohoAuth()
+      }, 1000)
+    } else if (event.data.type === "ZOHO_AUTH_ERROR") {
+      console.log("Authentication failed:", event.data.error)
+      setAuthInProgress(false)
+      setError(`❌ Zoho CRM authentication failed: ${event.data.error}`)
+      setZohoAuth({ authenticated: false })
+    }
+  }, [])
+
   useEffect(() => {
     fetchTransfers()
     checkZohoAuth()
-  }, [])
+
+    // Add message listener for popup communication
+    window.addEventListener("message", handlePopupMessage)
+
+    // Cleanup
+    return () => {
+      window.removeEventListener("message", handlePopupMessage)
+    }
+  }, [handlePopupMessage])
 
   useEffect(() => {
     applyFilters()
@@ -157,15 +206,29 @@ export default function AdminPage() {
   const checkZohoAuth = async () => {
     try {
       setCheckingAuth(true)
-      const response = await fetch("/api/zoho/auth")
+      console.log("Checking Zoho authentication...")
+
+      const response = await fetch("/api/zoho/auth", {
+        method: "GET",
+        cache: "no-cache",
+        headers: {
+          "Cache-Control": "no-cache",
+          Pragma: "no-cache",
+        },
+      })
+
+      console.log("Auth check response status:", response.status)
 
       if (response.ok) {
         const authData = await response.json()
+        console.log("Auth data received:", authData)
         setZohoAuth(authData)
       } else {
+        console.log("Auth check failed, setting to unauthenticated")
         setZohoAuth({ authenticated: false })
       }
     } catch (err) {
+      console.error("Auth check error:", err)
       setZohoAuth({ authenticated: false })
     } finally {
       setCheckingAuth(false)
@@ -173,84 +236,77 @@ export default function AdminPage() {
   }
 
   const initiateZohoAuth = async () => {
+    if (authInProgress) {
+      console.log("Authentication already in progress")
+      return
+    }
+
     try {
+      setAuthInProgress(true)
+      setError(null)
+      console.log("Starting Zoho authentication...")
+
       // Open Zoho OAuth in popup
       const authUrl = "/api/zoho/auth/login"
-      const popup = window.open(authUrl, "zoho-auth", "width=600,height=600,scrollbars=yes,resizable=yes")
-
-      // Listen for messages from popup
-      const handleMessage = (event: MessageEvent) => {
-        // Security check - ensure message is from our domain
-        if (event.origin !== window.location.origin) {
-          return
-        }
-
-        if (event.data.type === "ZOHO_AUTH_SUCCESS") {
-          // Update auth state
-          setZohoAuth({
-            authenticated: true,
-            organization: event.data.organization || "Zoho Organization",
-            user: event.data.user || "Zoho User",
-            expiresAt: new Date(Date.now() + 3600000).toISOString(), // 1 hour from now
-          })
-
-          // Clean up
-          window.removeEventListener("message", handleMessage)
-          if (popup) {
-            popup.close()
-          }
-
-          // Show success message
-          setError("Zoho CRM bağlantısı başarıyla kuruldu!")
-          setTimeout(() => setError(null), 3000)
-        } else if (event.data.type === "ZOHO_AUTH_ERROR") {
-          setError(`Zoho CRM authentication failed: ${event.data.error}`)
-          window.removeEventListener("message", handleMessage)
-          if (popup) {
-            popup.close()
-          }
-        }
-      }
-
-      // Add message listener
-      window.addEventListener("message", handleMessage)
+      const popup = window.open(
+        authUrl,
+        "zoho-auth",
+        "width=600,height=700,scrollbars=yes,resizable=yes,location=yes,status=yes",
+      )
 
       // Check if popup was blocked
       if (!popup) {
-        setError("Popup blocked. Please allow popups for this site.")
-        window.removeEventListener("message", handleMessage)
+        setAuthInProgress(false)
+        setError("❌ Popup blocked. Please allow popups for this site and try again.")
         return
       }
 
-      // Check if popup was closed manually
+      console.log("Popup opened successfully")
+
+      // Monitor popup status
       const checkClosed = setInterval(() => {
         if (popup.closed) {
+          console.log("Popup was closed")
           clearInterval(checkClosed)
-          window.removeEventListener("message", handleMessage)
+          setAuthInProgress(false)
+
+          // If popup was closed without success message, show error
+          setTimeout(() => {
+            if (authInProgress) {
+              setError("Authentication was cancelled or failed. Please try again.")
+            }
+          }, 1000)
         }
       }, 1000)
 
-      // Cleanup after 5 minutes
+      // Cleanup after 10 minutes
       setTimeout(() => {
         clearInterval(checkClosed)
-        window.removeEventListener("message", handleMessage)
         if (popup && !popup.closed) {
           popup.close()
         }
-      }, 300000)
+        setAuthInProgress(false)
+      }, 600000)
     } catch (err) {
-      setError("Zoho CRM authentication başlatılamadı")
+      console.error("Auth initiation error:", err)
+      setAuthInProgress(false)
+      setError("❌ Zoho CRM authentication başlatılamadı")
     }
   }
 
   const disconnectZoho = async () => {
     try {
+      setCheckingAuth(true)
       await fetch("/api/zoho/auth/logout", { method: "POST" })
       setZohoAuth({ authenticated: false })
       setSelectedDeal(null)
       setZohoDeals([])
+      setError("Zoho CRM bağlantısı kesildi")
+      setTimeout(() => setError(null), 3000)
     } catch (err) {
       setError("Zoho CRM bağlantısı kesilemedi")
+    } finally {
+      setCheckingAuth(false)
     }
   }
 
@@ -586,22 +642,35 @@ export default function AdminPage() {
                 )}
               </div>
               <div className="flex items-center gap-2">
-                {checkingAuth ? (
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600"></div>
+                {checkingAuth || authInProgress ? (
+                  <div className="flex items-center gap-2">
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600"></div>
+                    <span className="text-sm text-gray-600">
+                      {authInProgress ? "Authenticating..." : "Checking..."}
+                    </span>
+                  </div>
                 ) : zohoAuth.authenticated ? (
                   <>
                     <span className="text-sm text-green-700">
                       {zohoAuth.organization} - {zohoAuth.user}
                     </span>
+                    <Button variant="outline" size="sm" onClick={checkZohoAuth}>
+                      <RefreshCw className="h-4 w-4 mr-1" />
+                      Refresh
+                    </Button>
                     <Button variant="outline" size="sm" onClick={disconnectZoho}>
                       <LogOut className="h-4 w-4 mr-1" />
                       Bağlantıyı Kes
                     </Button>
                   </>
                 ) : (
-                  <Button onClick={initiateZohoAuth} className="bg-blue-600 hover:bg-blue-700">
+                  <Button
+                    onClick={initiateZohoAuth}
+                    className="bg-blue-600 hover:bg-blue-700"
+                    disabled={authInProgress}
+                  >
                     <LogIn className="h-4 w-4 mr-2" />
-                    Zoho CRM'e Bağlan
+                    {authInProgress ? "Connecting..." : "Zoho CRM'e Bağlan"}
                   </Button>
                 )}
               </div>
@@ -613,6 +682,15 @@ export default function AdminPage() {
             </p>
           </CardContent>
         </Card>
+
+        {/* Error/Success Message */}
+        {error && (
+          <Card className={error.includes("✅") ? "bg-green-50 border-green-200" : "bg-red-50 border-red-200"}>
+            <CardContent className="pt-4">
+              <p className={error.includes("✅") ? "text-green-600" : "text-red-600"}>{error}</p>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Filters */}
         <Card>
@@ -704,15 +782,6 @@ export default function AdminPage() {
             </div>
           </CardContent>
         </Card>
-
-        {/* Error Message */}
-        {error && (
-          <Card className="bg-red-50 border-red-200">
-            <CardContent className="pt-4">
-              <p className="text-red-600">{error}</p>
-            </CardContent>
-          </Card>
-        )}
 
         {/* Tabs for List and Calendar View */}
         <Tabs defaultValue="list" className="w-full">
@@ -1073,4 +1142,3 @@ export default function AdminPage() {
     </div>
   )
 }
-
