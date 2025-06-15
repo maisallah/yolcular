@@ -1,4 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
+import { tokenStorage } from "@/lib/token-storage"
 
 // Zoho OAuth configuration
 const ZOHO_CLIENT_ID = process.env.ZOHO_CLIENT_ID
@@ -100,7 +101,6 @@ export async function GET(request: NextRequest) {
     })
 
     console.log("Token response status:", tokenResponse.status)
-    console.log("Token response headers:", Object.fromEntries(tokenResponse.headers.entries()))
 
     if (!tokenResponse.ok) {
       const errorData = await tokenResponse.text()
@@ -121,7 +121,7 @@ export async function GET(request: NextRequest) {
       scope: tokenData.scope,
     })
 
-    // Get user information to determine the correct API domain
+    // Get user information
     console.log("Fetching user information...")
     const userResponse = await fetch("https://accounts.zoho.com/oauth/user/info", {
       headers: {
@@ -181,28 +181,12 @@ export async function GET(request: NextRequest) {
       token_type: tokenData.token_type || "Bearer",
     }
 
-    console.log("Storing tokens via API...")
+    console.log("Storing tokens directly to file...")
 
-    // Store tokens via internal API
-    try {
-      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"
-      const storeResponse = await fetch(`${baseUrl}/api/zoho/tokens`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(tokens),
-      })
+    // Store tokens directly using file storage
+    tokenStorage.set(tokens)
 
-      if (!storeResponse.ok) {
-        const storeError = await storeResponse.text()
-        console.error("Failed to store tokens via API:", storeError)
-      } else {
-        console.log("✅ Tokens stored successfully via API")
-      }
-    } catch (error) {
-      console.error("Error storing tokens via API:", error)
-    }
+    console.log("✅ Tokens stored successfully to file")
 
     // Success page
     const successHtml = `
@@ -242,7 +226,7 @@ export async function GET(request: NextRequest) {
           <div class="success">
             <div class="checkmark">✅</div>
             <h2>Authentication Successful!</h2>
-            <p>Zoho CRM bağlantısı başarıyla kuruldu.</p>
+            <p>Zoho CRM bağlantısı başarıyla kuruldu ve dosyaya kaydedildi.</p>
             <div class="info">
               <div class="info-row"><strong>User:</strong> ${userInfo.Email}</div>
               <div class="info-row"><strong>Organization:</strong> ${userInfo.Display_Name}</div>
@@ -269,7 +253,7 @@ export async function GET(request: NextRequest) {
             setTimeout(() => {
               console.log('🔒 Closing popup window');
               window.close();
-            }, 3000);
+            }, 2000);
           } else {
             console.warn('⚠️ No opener window found');
           }
@@ -304,12 +288,6 @@ export async function GET(request: NextRequest) {
           <div class="error-details">
             <strong>Error:</strong> ${error instanceof Error ? error.message : "Unknown error"}
           </div>
-          <p>Lütfen environment variables'ları kontrol edin:</p>
-          <ul style="text-align: left;">
-            <li>ZOHO_CLIENT_ID</li>
-            <li>ZOHO_CLIENT_SECRET</li>
-            <li>ZOHO_REDIRECT_URI</li>
-          </ul>
           <button onclick="window.close()">Pencereyi Kapat</button>
           <script>
             if (window.opener) {
