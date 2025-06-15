@@ -174,28 +174,70 @@ export default function AdminPage() {
 
   const initiateZohoAuth = async () => {
     try {
-      // Gerçek uygulamada Zoho OAuth URL'ine yönlendirilecek
+      // Open Zoho OAuth in popup
       const authUrl = "/api/zoho/auth/login"
-      window.open(authUrl, "zoho-auth", "width=600,height=600")
+      const popup = window.open(authUrl, "zoho-auth", "width=600,height=600,scrollbars=yes,resizable=yes")
 
-      // OAuth callback'i dinle
-      const checkAuthInterval = setInterval(async () => {
-        try {
-          const response = await fetch("/api/zoho/auth")
-          if (response.ok) {
-            const authData = await response.json()
-            if (authData.authenticated) {
-              setZohoAuth(authData)
-              clearInterval(checkAuthInterval)
-            }
-          }
-        } catch (err) {
-          // Auth check failed, continue polling
+      // Listen for messages from popup
+      const handleMessage = (event: MessageEvent) => {
+        // Security check - ensure message is from our domain
+        if (event.origin !== window.location.origin) {
+          return
         }
-      }, 2000)
 
-      // 5 dakika sonra polling'i durdur
-      setTimeout(() => clearInterval(checkAuthInterval), 300000)
+        if (event.data.type === "ZOHO_AUTH_SUCCESS") {
+          // Update auth state
+          setZohoAuth({
+            authenticated: true,
+            organization: event.data.organization || "Zoho Organization",
+            user: event.data.user || "Zoho User",
+            expiresAt: new Date(Date.now() + 3600000).toISOString(), // 1 hour from now
+          })
+
+          // Clean up
+          window.removeEventListener("message", handleMessage)
+          if (popup) {
+            popup.close()
+          }
+
+          // Show success message
+          setError("Zoho CRM bağlantısı başarıyla kuruldu!")
+          setTimeout(() => setError(null), 3000)
+        } else if (event.data.type === "ZOHO_AUTH_ERROR") {
+          setError(`Zoho CRM authentication failed: ${event.data.error}`)
+          window.removeEventListener("message", handleMessage)
+          if (popup) {
+            popup.close()
+          }
+        }
+      }
+
+      // Add message listener
+      window.addEventListener("message", handleMessage)
+
+      // Check if popup was blocked
+      if (!popup) {
+        setError("Popup blocked. Please allow popups for this site.")
+        window.removeEventListener("message", handleMessage)
+        return
+      }
+
+      // Check if popup was closed manually
+      const checkClosed = setInterval(() => {
+        if (popup.closed) {
+          clearInterval(checkClosed)
+          window.removeEventListener("message", handleMessage)
+        }
+      }, 1000)
+
+      // Cleanup after 5 minutes
+      setTimeout(() => {
+        clearInterval(checkClosed)
+        window.removeEventListener("message", handleMessage)
+        if (popup && !popup.closed) {
+          popup.close()
+        }
+      }, 300000)
     } catch (err) {
       setError("Zoho CRM authentication başlatılamadı")
     }
@@ -1031,3 +1073,4 @@ export default function AdminPage() {
     </div>
   )
 }
+
