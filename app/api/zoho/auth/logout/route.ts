@@ -1,18 +1,12 @@
 import { NextResponse } from "next/server"
-
-// In-memory token storage (should match other auth routes)
-let authTokens = {
-  access_token: "",
-  refresh_token: "",
-  expires_at: "",
-  organization_id: "",
-  user_email: "",
-}
+import { tokenStorage } from "@/lib/token-storage"
 
 export async function POST() {
   try {
+    const tokens = tokenStorage.get()
+
     // Revoke access token with Zoho
-    if (authTokens.access_token) {
+    if (tokens.access_token) {
       try {
         const revokeResponse = await fetch("https://accounts.zoho.com/oauth/v2/token/revoke", {
           method: "POST",
@@ -20,12 +14,14 @@ export async function POST() {
             "Content-Type": "application/x-www-form-urlencoded",
           },
           body: new URLSearchParams({
-            token: authTokens.access_token,
+            token: tokens.access_token,
           }),
         })
 
         if (!revokeResponse.ok) {
           console.warn("Token revocation failed, but continuing with logout")
+        } else {
+          console.log("Token revoked successfully")
         }
       } catch (error) {
         console.warn("Token revocation error:", error)
@@ -34,13 +30,7 @@ export async function POST() {
     }
 
     // Clear stored tokens
-    authTokens = {
-      access_token: "",
-      refresh_token: "",
-      expires_at: "",
-      organization_id: "",
-      user_email: "",
-    }
+    tokenStorage.clear()
 
     return NextResponse.json({
       success: true,
@@ -50,13 +40,7 @@ export async function POST() {
     console.error("Logout error:", error)
 
     // Clear tokens even if there's an error
-    authTokens = {
-      access_token: "",
-      refresh_token: "",
-      expires_at: "",
-      organization_id: "",
-      user_email: "",
-    }
+    tokenStorage.clear()
 
     return NextResponse.json({
       success: true,

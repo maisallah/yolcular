@@ -1,13 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-
-// Get auth tokens (in production, get from secure storage)
-const authTokens = {
-  access_token: "",
-  refresh_token: "",
-  expires_at: "",
-  organization_id: "",
-  user_email: "",
-}
+import { tokenStorage } from "@/lib/token-storage"
 
 // Mock data as fallback
 const mockZohoDeals = [
@@ -94,13 +86,18 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ deals: [] })
     }
 
+    const tokens = tokenStorage.get()
+    console.log("Zoho search request:", { leadId, hasToken: !!tokens.access_token })
+
     // Check if we have valid authentication
-    if (!authTokens.access_token) {
+    if (!tokens.access_token) {
+      console.log("No access token available for search")
       return NextResponse.json({ error: "Zoho CRM authentication required" }, { status: 401 })
     }
 
     // Check token expiry
-    if (new Date(authTokens.expires_at) <= new Date()) {
+    if (!tokenStorage.isValid()) {
+      console.log("Token expired for search")
       return NextResponse.json({ error: "Zoho CRM token expired" }, { status: 401 })
     }
 
@@ -109,12 +106,16 @@ export async function GET(request: NextRequest) {
       const searchCriteria = `(Lead_ID:contains:${leadId})`
       const zohoApiUrl = `https://www.zohoapis.com/crm/v2/Deals/search?criteria=${encodeURIComponent(searchCriteria)}`
 
+      console.log("Making Zoho API request:", zohoApiUrl)
+
       const zohoResponse = await fetch(zohoApiUrl, {
         headers: {
-          Authorization: `Zoho-oauthtoken ${authTokens.access_token}`,
+          Authorization: `Zoho-oauthtoken ${tokens.access_token}`,
           "Content-Type": "application/json",
         },
       })
+
+      console.log("Zoho API response status:", zohoResponse.status)
 
       if (!zohoResponse.ok) {
         if (zohoResponse.status === 401) {
@@ -124,6 +125,7 @@ export async function GET(request: NextRequest) {
       }
 
       const zohoData = await zohoResponse.json()
+      console.log("Zoho API response:", { dataCount: zohoData.data?.length || 0 })
 
       // Transform Zoho data to our format
       const deals = (zohoData.data || []).map((deal: any) => ({

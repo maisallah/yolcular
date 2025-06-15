@@ -1,4 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
+import { tokenStorage } from "@/lib/token-storage"
 
 // Zoho OAuth configuration
 const ZOHO_CLIENT_ID = process.env.ZOHO_CLIENT_ID || "your_zoho_client_id"
@@ -8,13 +9,13 @@ const ZOHO_REDIRECT_URI =
   `${process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"}/api/zoho/auth/callback`
 
 // In-memory token storage (in production, use database or secure session storage)
-let authTokens = {
-  access_token: "",
-  refresh_token: "",
-  expires_at: "",
-  organization_id: "",
-  user_email: "",
-}
+// let authTokens = {
+//   access_token: "",
+//   refresh_token: "",
+//   expires_at: "",
+//   organization_id: "",
+//   user_email: "",
+// }
 
 export async function GET(request: NextRequest) {
   try {
@@ -99,13 +100,24 @@ export async function GET(request: NextRequest) {
     }
 
     // Store tokens (in production, use secure storage)
-    authTokens = {
+    // authTokens = {
+    //   access_token: tokenData.access_token,
+    //   refresh_token: tokenData.refresh_token,
+    //   expires_at: new Date(Date.now() + tokenData.expires_in * 1000).toISOString(),
+    //   organization_id: userInfo.ZUID || "unknown",
+    //   user_email: userInfo.Email,
+    // }
+
+    // Store tokens using shared storage
+    tokenStorage.set({
       access_token: tokenData.access_token,
       refresh_token: tokenData.refresh_token,
       expires_at: new Date(Date.now() + tokenData.expires_in * 1000).toISOString(),
       organization_id: userInfo.ZUID || "unknown",
       user_email: userInfo.Email,
-    }
+    })
+
+    console.log("Tokens stored successfully")
 
     // Success page
     const successHtml = `
