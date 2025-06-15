@@ -104,6 +104,7 @@ export default function AdminPage() {
   const [error, setError] = useState<string | null>(null)
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [adding, setAdding] = useState(false)
+  const [currentUser, setCurrentUser] = useState<{ username: string; role: string; displayName: string } | null>(null)
 
   // Zoho authentication states
   const [zohoAuth, setZohoAuth] = useState<ZohoAuthStatus>({ authenticated: false })
@@ -202,6 +203,10 @@ export default function AdminPage() {
       setZohoDeals([])
     }
   }, [leadIdSearch, zohoAuth.authenticated])
+
+  useEffect(() => {
+    checkSession()
+  }, [])
 
   const checkZohoAuth = async () => {
     try {
@@ -471,6 +476,27 @@ export default function AdminPage() {
     }
   }
 
+  const checkSession = async () => {
+    try {
+      const response = await fetch("/api/auth/session")
+      if (response.ok) {
+        const data = await response.json()
+        setCurrentUser(data.user)
+      }
+    } catch (err) {
+      console.error("Session check failed:", err)
+    }
+  }
+
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" })
+      window.location.href = "/login"
+    } catch (err) {
+      console.error("Logout failed:", err)
+    }
+  }
+
   const applyFilters = () => {
     let filtered = [...transfers]
 
@@ -620,7 +646,19 @@ export default function AdminPage() {
             <h1 className="text-3xl font-bold text-gray-900 mb-2">Transfer Yönetimi</h1>
             <p className="text-gray-600">Zoho CRM entegrasyonu ile transfer yönetimi</p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex items-center gap-4">
+            {currentUser && (
+              <div className="flex items-center gap-2 text-sm text-gray-600">
+                <User className="h-4 w-4" />
+                <span>
+                  {currentUser.displayName} ({currentUser.role})
+                </span>
+                <Button variant="outline" size="sm" onClick={handleLogout}>
+                  <LogOut className="h-4 w-4 mr-1" />
+                  Çıkış
+                </Button>
+              </div>
+            )}
             <Button onClick={() => setShowAddDialog(true)} className="bg-green-600 hover:bg-green-700">
               <Plus className="h-4 w-4 mr-2" />
               Yeni Transfer

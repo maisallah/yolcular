@@ -1,61 +1,109 @@
 import { NextResponse } from "next/server"
 import { tokenStorage } from "@/lib/token-storage"
+import { cookies } from "next/headers"
 
 export async function GET() {
   try {
-    console.log("Auth check requested")
+    console.log("=== AUTH CHECK START ===")
+
+    // Debug: Check all cookies first
+    const cookieStore = cookies()
+    const allCookies = cookieStore.getAll()
+    console.log(
+      "All available cookies:",
+      allCookies.map((c) => ({ name: c.name, hasValue: !!c.value })),
+    )
 
     const tokens = tokenStorage.get()
-    console.log("Current tokens from cookies:", {
+    console.log("Tokens retrieved:", {
       hasAccessToken: !!tokens.access_token,
+      accessTokenLength: tokens.access_token.length,
       hasRefreshToken: !!tokens.refresh_token,
+      refreshTokenLength: tokens.refresh_token.length,
       expiresAt: tokens.expires_at,
       userEmail: tokens.user_email,
     })
 
     // Check if we have valid tokens
     if (!tokens.access_token || !tokens.expires_at) {
-      console.log("No tokens found in cookies")
-      return NextResponse.json({ authenticated: false }, { status: 401 })
+      console.log("❌ No tokens found - returning 401")
+      return NextResponse.json(
+        {
+          authenticated: false,
+          reason: "No tokens found",
+          debug: {
+            hasAccessToken: !!tokens.access_token,
+            hasExpiresAt: !!tokens.expires_at,
+          },
+        },
+        { status: 401 },
+      )
     }
 
     // Check if token is expired
     if (!tokenStorage.isValid()) {
-      console.log("Token expired, attempting refresh...")
-      // Try to refresh token
+      console.log("⏰ Token expired, attempting refresh...")
+
       if (tokens.refresh_token) {
         try {
           await refreshAccessToken()
-          console.log("Token refresh successful")
+          console.log("✅ Token refresh successful")
         } catch (error) {
-          console.error("Token refresh failed:", error)
-          return NextResponse.json({ authenticated: false }, { status: 401 })
+          console.error("❌ Token refresh failed:", error)
+          return NextResponse.json(
+            {
+              authenticated: false,
+              reason: "Token refresh failed",
+              error: error instanceof Error ? error.message : "Unknown error",
+            },
+            { status: 401 },
+          )
         }
       } else {
-        console.log("No refresh token available")
-        return NextResponse.json({ authenticated: false }, { status: 401 })
+        console.log("❌ No refresh token available")
+        return NextResponse.json(
+          {
+            authenticated: false,
+            reason: "No refresh token available",
+          },
+          { status: 401 },
+        )
       }
     }
 
     // Get updated tokens after potential refresh
     const currentTokens = tokenStorage.get()
+    console.log("Using tokens for validation:", {
+      hasAccessToken: !!currentTokens.access_token,
+      accessTokenPreview: currentTokens.access_token.substring(0, 10) + "...",
+    })
 
     // Validate token with Zoho
     try {
-      console.log("Validating token with Zoho...")
+      console.log("🔍 Validating token with Zoho...")
       const userResponse = await fetch("https://accounts.zoho.com/oauth/user/info", {
         headers: {
           Authorization: `Zoho-oauthtoken ${currentTokens.access_token}`,
         },
       })
 
+      console.log("Zoho validation response status:", userResponse.status)
+
       if (!userResponse.ok) {
-        console.error("Token validation failed:", userResponse.status)
-        throw new Error("Token validation failed")
+        const errorText = await userResponse.text()
+        console.error("❌ Token validation failed:", {
+          status: userResponse.status,
+          statusText: userResponse.statusText,
+          body: errorText,
+        })
+        throw new Error(`Token validation failed: ${userResponse.status}`)
       }
 
       const userInfo = await userResponse.json()
-      console.log("Token validation successful:", userInfo.Email)
+      console.log("✅ Token validation successful:", {
+        email: userInfo.Email,
+        name: userInfo.Display_Name,
+      })
 
       return NextResponse.json({
         authenticated: true,
@@ -65,12 +113,25 @@ export async function GET() {
         scopes: ["ZohoCRM.modules.deals.READ", "ZohoCRM.modules.contacts.READ"],
       })
     } catch (error) {
-      console.error("Token validation error:", error)
-      return NextResponse.json({ authenticated: false }, { status: 401 })
+      console.error("❌ Token validation error:", error)
+      return NextResponse.json(
+        {
+          authenticated: false,
+          reason: "Token validation failed",
+          error: error instanceof Error ? error.message : "Unknown error",
+        },
+        { status: 401 },
+      )
     }
   } catch (error) {
-    console.error("Authentication check failed:", error)
-    return NextResponse.json({ error: "Authentication check failed" }, { status: 500 })
+    console.error("❌ Authentication check failed:", error)
+    return NextResponse.json(
+      {
+        error: "Authentication check failed",
+        details: error instanceof Error ? error.message : "Unknown error",
+      },
+      { status: 500 },
+    )
   }
 }
 
@@ -79,7 +140,6 @@ export async function POST() {
     console.log("Manual token refresh requested")
     const tokens = tokenStorage.get()
 
-    // Manual token refresh
     if (!tokens.refresh_token) {
       return NextResponse.json({ error: "No refresh token available" }, { status: 401 })
     }
@@ -99,10 +159,19 @@ export async function POST() {
 }
 
 async function refreshAccessToken() {
-  const ZOHO_CLIENT_ID = process.env.ZOHO_CLIENT_ID || "your_zoho_client_id"
-  const ZOHO_CLIENT_SECRET = process.env.ZOHO_CLIENT_SECRET || "your_zoho_client_secret"
+  const ZOHO_CLIENT_ID = process.env.ZOHO_CLIENT_ID
+  const ZOHO_CLIENT_SECRET = process.env.ZOHO_CLIENT_SECRET
+
+  if (!ZOHO_CLIENT_ID || !ZOHO_CLIENT_SECRET) {
+    throw new Error("Missing Zoho client credentials")
+  }
 
   const tokens = tokenStorage.get()
+
+  console.log("Refreshing token with:", {
+    hasRefreshToken: !!tokens.refresh_token,
+    clientId: ZOHO_CLIENT_ID.substring(0, 10) + "...",
+  })
 
   const refreshResponse = await fetch("https://accounts.zoho.com/oauth/v2/token", {
     method: "POST",
@@ -119,19 +188,23 @@ async function refreshAccessToken() {
 
   if (!refreshResponse.ok) {
     const errorData = await refreshResponse.text()
-    console.error("Token refresh failed:", errorData)
-    throw new Error("Failed to refresh access token")
+    console.error("Token refresh failed:", {
+      status: refreshResponse.status,
+      statusText: refreshResponse.statusText,
+      body: errorData,
+    })
+    throw new Error(`Failed to refresh access token: ${refreshResponse.status}`)
   }
 
   const tokenData = await refreshResponse.json()
-
-  // Update stored tokens
-  tokenStorage.setServerSide({
-    access_token: tokenData.access_token,
-    expires_at: new Date(Date.now() + tokenData.expires_in * 1000).toISOString(),
-    // Refresh token might be updated
-    ...(tokenData.refresh_token && { refresh_token: tokenData.refresh_token }),
+  console.log("Token refresh successful:", {
+    hasAccessToken: !!tokenData.access_token,
+    expiresIn: tokenData.expires_in,
   })
+
+  // We need to set cookies in the response, but we can't do that here
+  // This is a limitation of the current approach
+  console.warn("⚠️ Cannot update cookies from refresh function - this is a limitation")
 
   console.log("Access token refreshed successfully")
 }
