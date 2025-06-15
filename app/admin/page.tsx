@@ -27,6 +27,7 @@ import {
   LogIn,
   LogOut,
   RefreshCw,
+  Settings,
 } from "lucide-react"
 
 interface TransferData {
@@ -105,6 +106,7 @@ export default function AdminPage() {
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [adding, setAdding] = useState(false)
   const [currentUser, setCurrentUser] = useState<{ username: string; role: string; displayName: string } | null>(null)
+  const [showBrowserHelp, setShowBrowserHelp] = useState(false)
 
   // Zoho authentication states
   const [zohoAuth, setZohoAuth] = useState<ZohoAuthStatus>({ authenticated: false })
@@ -140,10 +142,40 @@ export default function AdminPage() {
     leadId: "",
   })
 
+  // Browser compatibility check
+  const checkBrowserCompatibility = () => {
+    const issues = []
+
+    // Check if popups are likely blocked
+    const testPopup = window.open("", "_blank", "width=1,height=1")
+    if (!testPopup || testPopup.closed) {
+      issues.push("Popup blocker is enabled")
+    } else {
+      testPopup.close()
+    }
+
+    // Check for third-party cookie support
+    if (navigator.cookieEnabled === false) {
+      issues.push("Cookies are disabled")
+    }
+
+    // Check for localStorage support
+    try {
+      localStorage.setItem("test", "test")
+      localStorage.removeItem("test")
+    } catch (e) {
+      issues.push("Local storage is disabled")
+    }
+
+    return issues
+  }
+
   // Message handler for popup communication
   const handlePopupMessage = useCallback((event: MessageEvent) => {
-    // Security check - ensure message is from our domain
-    if (event.origin !== window.location.origin) {
+    // Security check - ensure message is from our domain or Zoho
+    const allowedOrigins = [window.location.origin, "https://accounts.zoho.com", "https://accounts.zoho.eu"]
+
+    if (!allowedOrigins.includes(event.origin)) {
       console.log("Message from different origin ignored:", event.origin)
       return
     }
@@ -170,12 +202,15 @@ export default function AdminPage() {
       // Re-check auth status to confirm
       setTimeout(() => {
         checkZohoAuth()
-      }, 1000)
+      }, 2000) // Increased delay to allow file write to complete
     } else if (event.data.type === "ZOHO_AUTH_ERROR") {
       console.log("Authentication failed:", event.data.error)
       setAuthInProgress(false)
       setError(`❌ Zoho CRM authentication failed: ${event.data.error}`)
       setZohoAuth({ authenticated: false })
+
+      // Show browser help if authentication fails
+      setShowBrowserHelp(true)
     }
   }, [])
 
@@ -185,6 +220,12 @@ export default function AdminPage() {
 
     // Add message listener for popup communication
     window.addEventListener("message", handlePopupMessage)
+
+    // Check browser compatibility on load
+    const browserIssues = checkBrowserCompatibility()
+    if (browserIssues.length > 0) {
+      console.warn("Browser compatibility issues:", browserIssues)
+    }
 
     // Cleanup
     return () => {
@@ -246,41 +287,57 @@ export default function AdminPage() {
       return
     }
 
+    // Check browser compatibility first
+    const browserIssues = checkBrowserCompatibility()
+    if (browserIssues.length > 0) {
+      setError(`⚠️ Browser issues detected: ${browserIssues.join(", ")}. Please check browser settings.`)
+      setShowBrowserHelp(true)
+      return
+    }
+
     try {
       setAuthInProgress(true)
       setError(null)
       console.log("Starting Zoho authentication...")
 
-      // Open Zoho OAuth in popup
+      // Open Zoho OAuth in popup with better parameters
       const authUrl = "/api/zoho/auth/login"
       const popup = window.open(
         authUrl,
         "zoho-auth",
-        "width=600,height=700,scrollbars=yes,resizable=yes,location=yes,status=yes",
+        "width=600,height=700,scrollbars=yes,resizable=yes,location=yes,status=yes,menubar=no,toolbar=no",
       )
 
       // Check if popup was blocked
       if (!popup) {
         setAuthInProgress(false)
         setError("❌ Popup blocked. Please allow popups for this site and try again.")
+        setShowBrowserHelp(true)
         return
       }
 
       console.log("Popup opened successfully")
 
-      // Monitor popup status
+      // Monitor popup status with better error handling
       const checkClosed = setInterval(() => {
-        if (popup.closed) {
-          console.log("Popup was closed")
+        try {
+          if (popup.closed) {
+            console.log("Popup was closed")
+            clearInterval(checkClosed)
+            setAuthInProgress(false)
+
+            // If popup was closed without success message, show error
+            setTimeout(() => {
+              if (authInProgress) {
+                setError("Authentication was cancelled or failed. Please try again.")
+                setShowBrowserHelp(true)
+              }
+            }, 1000)
+          }
+        } catch (error) {
+          console.error("Error checking popup status:", error)
           clearInterval(checkClosed)
           setAuthInProgress(false)
-
-          // If popup was closed without success message, show error
-          setTimeout(() => {
-            if (authInProgress) {
-              setError("Authentication was cancelled or failed. Please try again.")
-            }
-          }, 1000)
         }
       }, 1000)
 
@@ -296,6 +353,7 @@ export default function AdminPage() {
       console.error("Auth initiation error:", err)
       setAuthInProgress(false)
       setError("❌ Zoho CRM authentication başlatılamadı")
+      setShowBrowserHelp(true)
     }
   }
 
@@ -666,6 +724,50 @@ export default function AdminPage() {
           </div>
         </div>
 
+        {/* Browser Help Dialog */}
+        <Dialog open={showBrowserHelp} onOpenChange={setShowBrowserHelp}>
+          <DialogContent className="w-[95vw] max-w-2xl">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <Settings className="h-5 w-5" />
+                Browser Settings Help
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                <h3 className="font-semibold text-yellow-800 mb-2">Zoho authentication için browser ayarları:</h3>
+                <div className="space-y-3 text-sm text-yellow-700">
+                  <div>
+                    <strong>1. Popup Blocker:</strong>
+                    <ul className="ml-4 mt-1 space-y-1">
+                      <li>• Chrome: Settings → Privacy and security → Site Settings → Pop-ups and redirects</li>
+                      <li>• Firefox: Settings → Privacy & Security → Block pop-up windows</li>
+                      <li>• Safari: Preferences → Websites → Pop-up Windows</li>
+                    </ul>
+                    <p className="mt-1 font-medium">Allow popups for: yolcular.vercel.app</p>
+                  </div>
+                  <div>
+                    <strong>2. Third-Party Cookies:</strong>
+                    <ul className="ml-4 mt-1 space-y-1">
+                      <li>
+                        • Chrome: Settings → Privacy and security → Third-party cookies → "Allow third-party cookies"
+                      </li>
+                      <li>• Or add exception for: accounts.zoho.com</li>
+                    </ul>
+                  </div>
+                  <div>
+                    <strong>3. JavaScript:</strong>
+                    <p className="ml-4">Ensure JavaScript is enabled for this site</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button onClick={() => setShowBrowserHelp(false)}>Got it</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         {/* Zoho Integration Status */}
         <Card className={zohoAuth.authenticated ? "bg-green-50 border-green-200" : "bg-yellow-50 border-yellow-200"}>
           <CardContent className="pt-4">
@@ -702,14 +804,20 @@ export default function AdminPage() {
                     </Button>
                   </>
                 ) : (
-                  <Button
-                    onClick={initiateZohoAuth}
-                    className="bg-blue-600 hover:bg-blue-700"
-                    disabled={authInProgress}
-                  >
-                    <LogIn className="h-4 w-4 mr-2" />
-                    {authInProgress ? "Connecting..." : "Zoho CRM'e Bağlan"}
-                  </Button>
+                  <>
+                    <Button
+                      onClick={initiateZohoAuth}
+                      className="bg-blue-600 hover:bg-blue-700"
+                      disabled={authInProgress}
+                    >
+                      <LogIn className="h-4 w-4 mr-2" />
+                      {authInProgress ? "Connecting..." : "Zoho CRM'e Bağlan"}
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => setShowBrowserHelp(true)}>
+                      <Settings className="h-4 w-4 mr-1" />
+                      Help
+                    </Button>
+                  </>
                 )}
               </div>
             </div>
