@@ -199,10 +199,11 @@ export default function AdminPage() {
       // Clear error after 5 seconds
       setTimeout(() => setError(null), 5000)
 
-      // Re-check auth status to confirm
+      // Re-check auth status to confirm with longer delay
       setTimeout(() => {
+        console.log("Re-checking auth status after successful authentication...")
         checkZohoAuth()
-      }, 2000) // Increased delay to allow file write to complete
+      }, 3000) // Increased to 3 seconds to allow file operations to complete
     } else if (event.data.type === "ZOHO_AUTH_ERROR") {
       console.log("Authentication failed:", event.data.error)
       setAuthInProgress(false)
@@ -269,8 +270,14 @@ export default function AdminPage() {
         const authData = await response.json()
         console.log("Auth data received:", authData)
         setZohoAuth(authData)
+
+        // If we were previously showing an error, clear it
+        if (authData.authenticated && error?.includes("❌")) {
+          setError(null)
+        }
       } else {
-        console.log("Auth check failed, setting to unauthenticated")
+        const errorData = await response.json()
+        console.log("Auth check failed:", errorData)
         setZohoAuth({ authenticated: false })
       }
     } catch (err) {

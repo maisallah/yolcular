@@ -4,16 +4,21 @@ import { tokenStorage } from "@/lib/token-storage"
 export async function GET() {
   try {
     console.log("=== AUTH CHECK START ===")
+    console.log("Timestamp:", new Date().toISOString())
+
+    // Add a small delay to ensure any file writes are complete
+    await new Promise((resolve) => setTimeout(resolve, 100))
 
     const tokens = tokenStorage.get()
     console.log("Tokens retrieved from file storage:", {
       hasAccessToken: !!tokens.access_token,
-      accessTokenLength: tokens.access_token.length,
+      accessTokenLength: tokens.access_token?.length || 0,
       hasRefreshToken: !!tokens.refresh_token,
-      refreshTokenLength: tokens.refresh_token.length,
+      refreshTokenLength: tokens.refresh_token?.length || 0,
       expiresAt: tokens.expires_at,
       userEmail: tokens.user_email,
       apiDomain: tokens.api_domain,
+      accountsDomain: tokens.accounts_domain,
     })
 
     // Check if we have valid tokens
@@ -26,6 +31,7 @@ export async function GET() {
           debug: {
             hasAccessToken: !!tokens.access_token,
             hasExpiresAt: !!tokens.expires_at,
+            timestamp: new Date().toISOString(),
           },
         },
         { status: 401 },
@@ -33,7 +39,18 @@ export async function GET() {
     }
 
     // Check if token is expired
-    if (!tokenStorage.isValid()) {
+    const expiresAt = new Date(tokens.expires_at)
+    const now = new Date()
+    const timeUntilExpiry = Math.floor((expiresAt.getTime() - now.getTime()) / 1000)
+
+    console.log("Token expiry check:", {
+      expiresAt: expiresAt.toISOString(),
+      now: now.toISOString(),
+      timeUntilExpiry,
+      isExpired: timeUntilExpiry <= 0,
+    })
+
+    if (timeUntilExpiry <= 0) {
       console.log("⏰ Token expired, attempting refresh...")
 
       if (tokens.refresh_token) {
@@ -67,13 +84,16 @@ export async function GET() {
     const currentTokens = tokenStorage.get()
     console.log("Using tokens for validation:", {
       hasAccessToken: !!currentTokens.access_token,
-      accessTokenPreview: currentTokens.access_token.substring(0, 10) + "...",
+      accessTokenPreview: currentTokens.access_token?.substring(0, 10) + "...",
+      userEmail: currentTokens.user_email,
     })
 
     // Validate token with Zoho
     try {
       console.log("🔍 Validating token with Zoho...")
-      const userResponse = await fetch("https://accounts.zoho.com/oauth/user/info", {
+      const accountsDomain = currentTokens.accounts_domain || "https://accounts.zoho.com"
+
+      const userResponse = await fetch(`${accountsDomain}/oauth/user/info`, {
         headers: {
           Authorization: `Zoho-oauthtoken ${currentTokens.access_token}`,
         },
@@ -88,6 +108,10 @@ export async function GET() {
           statusText: userResponse.statusText,
           body: errorText,
         })
+
+        // If validation fails, clear tokens and return unauthenticated
+        tokenStorage.clear()
+
         throw new Error(`Token validation failed: ${userResponse.status}`)
       }
 
@@ -95,15 +119,24 @@ export async function GET() {
       console.log("✅ Token validation successful:", {
         email: userInfo.Email,
         name: userInfo.Display_Name,
+        orgId: userInfo.ZUID,
       })
 
-      return NextResponse.json({
+      const response = {
         authenticated: true,
-        organization: userInfo.Display_Name || "Zoho Organization",
+        organization: userInfo.Display_Name || currentTokens.organization_id || "Zoho Organization",
         user: userInfo.Email || currentTokens.user_email,
         expiresAt: currentTokens.expires_at,
         scopes: ["ZohoCRM.modules.deals.READ", "ZohoCRM.modules.contacts.READ"],
-      })
+        debug: {
+          tokenValidated: true,
+          timestamp: new Date().toISOString(),
+          timeUntilExpiry: Math.floor((new Date(currentTokens.expires_at).getTime() - Date.now()) / 1000),
+        },
+      }
+
+      console.log("✅ Returning authenticated response:", response)
+      return NextResponse.json(response)
     } catch (error) {
       console.error("❌ Token validation error:", error)
       return NextResponse.json(
@@ -111,6 +144,9 @@ export async function GET() {
           authenticated: false,
           reason: "Token validation failed",
           error: error instanceof Error ? error.message : "Unknown error",
+          debug: {
+            timestamp: new Date().toISOString(),
+          },
         },
         { status: 401 },
       )
@@ -121,6 +157,9 @@ export async function GET() {
       {
         error: "Authentication check failed",
         details: error instanceof Error ? error.message : "Unknown error",
+        debug: {
+          timestamp: new Date().toISOString(),
+        },
       },
       { status: 500 },
     )
@@ -159,13 +198,15 @@ async function refreshAccessToken() {
   }
 
   const tokens = tokenStorage.get()
+  const accountsDomain = tokens.accounts_domain || "https://accounts.zoho.com"
 
   console.log("Refreshing token with:", {
     hasRefreshToken: !!tokens.refresh_token,
     clientId: ZOHO_CLIENT_ID.substring(0, 10) + "...",
+    accountsDomain,
   })
 
-  const refreshResponse = await fetch("https://accounts.zoho.com/oauth/v2/token", {
+  const refreshResponse = await fetch(`${accountsDomain}/oauth/v2/token`, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
@@ -194,10 +235,13 @@ async function refreshAccessToken() {
     expiresIn: tokenData.expires_in,
   })
 
+  // Calculate expiry time with buffer
+  const expiresAt = new Date(Date.now() + (tokenData.expires_in - 300) * 1000).toISOString() // 5 min buffer
+
   // Update tokens in file storage
   tokenStorage.set({
     access_token: tokenData.access_token,
-    expires_at: new Date(Date.now() + tokenData.expires_in * 1000).toISOString(),
+    expires_at: expiresAt,
     // Refresh token might be updated
     ...(tokenData.refresh_token && { refresh_token: tokenData.refresh_token }),
   })
